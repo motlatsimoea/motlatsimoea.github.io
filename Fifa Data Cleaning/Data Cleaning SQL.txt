@@ -1,0 +1,189 @@
+Introduction
+So, this is an attempt to study SQL deeper through a project. To be more specific, this time around,
+I will be using SQL to clean the FIFA data that I recently cleaned using Microsoft Excel. Let's begin.
+
+
+Step 1 - Let's try to import the data into Microsoft SQL Server Management Studio:
+
+I'm going to try to import the file as an unprocessed csv file and see what happens. The import using the "FlatFile" command
+seems to have worked out well.
+
+Step 2 - Let's inspect the data to see what we might get.
+		select *
+		from  fifads;
+
+	
+Step 3 - Remove Duplicates:
+In SQL this is basically the same as simply choosing distinct rows from the data.
+	(SELECT DISTINCT * FROM customers;)
+
+There does not seem to be any duplicates because the count of rows before and after the execution of the code remain the same
+
+Step 4 - Let me look at the Contract date:
+I need to break this into 
+	- the year the contract started,
+	- year the contract ended.
+	- I also need to show the onloan status.
+
+Where a full date is given, I want also extract the year and remove the rest.
+
+Let me look at these functions: SUBSTRING(), CHARINDEX(), EXTRACT(), LIKE()
+
+STRATEGY:
+We have a number of cases in this column:
+All in all, we need about 3 new columns.
+
+	- first case consists of simply seperating the column where there is a '~' value;
+	- second case, split on 'On loan', and extract the year from the date;
+	- Third, the Onloan must be on its own third column. 
+
+First attempt at solving this problem has brought up some issues. I wanted to upadate a new column(Contract_start) with a values extracted 
+from the old column using a subquery. 
+			update [fifa21 ]
+			set Contract_Start =(select 
+			(case when CHARINDEX('~', Contract)>0
+			then SUBSTRING(Contract,1,CHARINDEX('~', Contract)-1)
+			END)
+
+		     	from [fifa21 ]);
+Yeah this did not work. Cannot use a equal sign or any of the equating signs when dealing with a subquery on the other
+side of an equal sign! Groovy!
+
+Okay! So I have it half figured out! I have managed to separate the column into getting contract_Start and contract_End.
+
+			update DataCleaning.dbo.[fifa21 ]
+			set Contract_Start = SUBSTRING(Contract,1,4)
+			where Contract LIKE '%~%';
+
+			update DataCleaning.dbo.[fifa21 ]
+			set Contract_End = SUBSTRING(Contract, 8,4)
+			where Contract LIKE '%~%';
+
+			update DataCleaning.dbo.[fifa21 ]
+			set Loan_status = RIGHT(Contract,7)
+			where Contract LIKE '%Loan%';
+	
+			update DataCleaning.dbo.[fifa21 ]
+			set Contract_End = SUBSTRING(Contract,9,4)
+			where Contract LIKE '%Loan%';
+
+The lines above fixe the column. This is probably too many lines of code, but for now, it works! On to the next one!
+
+Step 5 - Let me next look at the height and Weight columns:
+
+These two columns have similar problems. They have values in different units.
+
+	- The heights are in cm. this is good. Then suddenly turn to feet and inches! This is a pain! Top of that,
+	  the format of these outliers is weird(ft'inch"). What a pain!
+
+	- The weight values are a little more kind because I would just need to remove the lbs and multiply the ramaining 
+	  values with a conversion value to get the right value.
+
+Let's start with the heights:
+	My thinking is that first, must remove the apostrophe and the double apostrophe(ft'inch"). The first one is easy
+	enough: 
+				update DataCleaning.dbo.[fifa21 ]
+				set Height = REPLACE(Height, '"','')
+	
+	Second part was a bit tricker. This is because, using the single quotes around a single apostrophe doesn't work.
+	What to do, what to do? Google!
+	
+	There is a function called STUFF(). This is perfect! I just need to be clear about the position of the character
+	that I need to delete and what I want to replace it with. I just need to make sure that this only targets specific
+	values. Like so:
+
+				update DataCleaning.dbo.[fifa21 ]
+				set Height = STUFF(Height,2,1,'.')
+				where Height NOT LIKE '%cm%';
+
+Next, I removed the 'cm', converted everything into decimals, then multiplied the values that have a decimal with 
+the conversion value. BOOM!
+
+				update fifads
+				set Height_fixed_cm = REPLACE(Height_fixed_cm, 'cm','');
+
+				update fifads
+				set Height_fixed_cm = CAST(Height_fixed_cm AS decimal(18,2));
+
+				update fifads
+				set Height_fixed_cm = Height_fixed_cm * 30.48
+				where SUBSTRING(Height_fixed_cm, 2,1) LIKE '%.%';
+
+				update fifads
+				set Height_fixed_cm = ROUND(Height_fixed_cm,0);
+
+NB: I realised that I should have probably replicated the column before I start messing with it, so I started this process from the beginning
+with a duplicated column.
+
+Now for the Weights:
+
+				update fifads
+				set weight_fixed_kg = REPLACE(weight_fixed_kg, 'lbs','')
+
+				update fifads
+				set weight_fixed_kg = CAST(weight_fixed_kg AS int) * 0.453592
+				where weight_fixed_kg NOT LIKE '%kg%';
+
+				update fifads
+				set  weight_fixed_kg = CAST(REPLACE(weight_fixed_kg, 'kg','') as decimal(18,0));
+
+
+
+STEP 6 - Converting the money values into actual numbers. First thought, CASES!! Let's try it out and see what we get!
+
+Okay, got ahead of myself there. First, some minor editing. Duplicated the column. Then I removed the Pound symbol.
+			
+			update fifads
+			set Value_Fixed = REPLACE(Value,'€','');
+
+			-With Value_conversions (col_1, col_2)
+			--AS
+			--(
+			--select Value_Fixed,
+			--	CASE 
+			--		WHEN RIGHT(Value_Fixed,1)='M'
+			--			THEN CAST(REPLACE(Value_Fixed,'M','') AS decimal(18,2)) * 1000000
+
+			--		WHEN RIGHT(Value_Fixed,1)='K'
+			--			THEN CAST(REPLACE(Value_Fixed,'K','') AS decimal(18,2)) * 1000
+			--	END as correct
+
+
+			--from fifads
+			--)
+			--update fifads
+			--set Value_Fixed = (select col_2 from Value_conversions); 
+
+This failed but it was awesome writing a proper cte!!!!!!
+
+
+So, sometimes we overcomplicate things. Simplicity is always key. Why do I say this? The solution was actually much simpler.
+Look: 
+			update fifads
+			set Value_Fixed = CAST(REPLACE(Value_Fixed, 'M','') AS decimal(18,2)) * 1000000
+			where Value_Fixed LIKE '%M%';
+
+Do this for the 'K' values as well and it solves all the money problems. Then just convert everything to decimal values!
+
+			update fifads
+			set Release_clause_fixed = CAST(Release_clause_fixed AS decimal(18,2)),
+			    Wage_fixed = CAST(Wage_fixed AS decimal(18,2)),
+			    Value_Fixed = CAST(Value_Fixed AS decimal(18,2));
+
+STEP 7 - Some of the values in the the Hits column were in thousands, but they were in the 'K' format. It wasn't even 
+this though, because the K value was missing! Not sure how this happened, but I caught it in the orignial csv file.
+
+How to fix this? Pattern recognition. the values meant to have the 'K' had a non-zero value after the decimal point. So it was:
+				format : Non-zero-value.Non-zero-value 
+
+So what I had to do was indentify these values, convert them to decimals and multiply by 1,000!
+
+		update fifads
+		set Hits_fixed = CAST(Hits_fixed AS decimal(18,2)) * 1000
+		where LEFT(Hits_fixed, 2) LIKE '%.%' and LEFT(Hits_fixed,3) NOT LIKE '%0%';
+
+
+
+Well that was fun! I learned a lot from this. Multiple functions I did not know SQL had. The way I wrote this code also
+began to improve with more practice. A lot of the first lines of code were too long looking back.
+
