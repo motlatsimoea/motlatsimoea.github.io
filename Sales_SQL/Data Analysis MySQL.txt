@@ -1,0 +1,165 @@
+INTRODUCTION
+
+I obtained these sales records from a tutorial playlist from a YouTube channel called Codebasics. It has five tables.
+I decided this data would be ideal to allow for the demonstration of some SQL skills. Also help me improve my skills,
+since that is the main point here.
+
+
+The Tables: - Customers
+	     - Date
+	     - Markets
+	     - Products
+             - Transactions
+
+For this analysis, I will be using Mysql Workbench.
+			
+				SELECT, DECRIBE, DISTICT
+
+-Let me start with something simple. describe the tables. See what the columns look like.
+	
+		describe customers;
+For the customers table, this for example tells me that there are 3 fields(customer_code, customer_name, customer_type) as well
+as their data types.
+
+Let me inspect the transactions table because by my assesment, it is the Facts table while the others are dimensions.
+
+		select *  from transactions limit 5;
+There are some Sales_amount values that are "-1". This is obviously incorrect. This must be fixed before any serious Analysis.
+
+		select * from transactions where currency = 'USD';
+
+The Fact that there are two USD values means there is a problem there. Some data cleaning is necessary here. Let's take a closer look at the
+currency column:
+		select distinct currency 
+		from transactions;
+
+The INR values also have two values. Again, this means that there needs to be some data cleaning here.
+
+						JOINS
+
+Let's join the customer and transactions table to get the transaction information for the customer = 'Brick & Mortar'
+
+		select t.*, c.*
+		from transactions t inner join customers c
+		on c.customer_code = t.customer_code
+		where customer_type = 'Brick & Mortar';
+
+Transactions for a specific year using the 'transactions' and 'date' tables
+		select t.*, d.*
+		from transactions t inner join date d
+		on t.order_date = d.date
+		where d.year = 2020;
+
+
+						GROUP BY
+At this point, I wanted to see the total qualities sold, as well as the value of the sales. I wanted to get these values for each Market Code.
+To do this, I had to use the 'Group by' function.
+		
+		select market_code, sum(sales_qty) Sales_Quantity, sum(sales_amount) Sales_Amount
+		from transactions
+		group by market_code;
+
+						WINDOW FUNCTION
+
+Let's assume that I want to know the individual sales amount for each product_code. I want to compare that to the total sales for that 
+product_code. Well, I would sum the sales for each product code and show them alongside each individual sales value. Makes sense? No? Run this code
+and see what I mean:
+
+			select sales_amount, product_code, 
+			sum(sales_amount) over (partition by product_code) Total_Product_code_sales
+			from transactions t inner join date d
+			on t.order_date = d.date;
+		
+Could do that with other aggregate functions:
+			select sales_amount, product_code, 
+			max(sales_amount) over (partition by product_code) Total_Product_code_sales
+			from transactions t inner join date d
+			on t.order_date = d.date;
+
+One might want to know the relative ranking of a certain quantity relative to over quantities in a column. For example, one might want to know the relative
+income by each product. This could be achieved using the PERCENT_RANK() function. This will assign a value representing the relative value of a row in a window.
+
+			select product_code, market_code, sales_amount,
+			cume_dist() over (partition by product_code order by sales_amount) as cum_value,
+			percent_rank() over (partition by product_code order by sales_amount) as relative_rank
+			from transactions;
+
+I also added the cumulative ranking of each row as well, just for the fun of it.
+
+						USING CTE
+Let's suppose that I wanted to then calculate the % of each individual sales_amount to the Total_Product_code_sales? I cannot use the aggregate I just created
+in a calculation in the same query in which it was created. That is, I cannot just say:
+
+			select sales_amount, product_code, 
+			sum(sales_amount) over (partition by product_code) Total_Product_code_sales, (sales_amount/Total_Product_code_sales) Percent
+			from transactions t inner join date d
+			on t.order_date = d.date;
+
+What we would need is a Common Table Expression. That will allow us to create a temporary table in which the Total_Product_code_sales exists as a value that 
+is not 'derived'. from that temporary table, we could use that value like any other value.
+
+			WITH percent_cte (sales, codes, Total)
+			AS 
+			(
+				select sales_amount, product_code, 
+				sum(sales_amount) over (partition by product_code) Total_Product_code_sales
+				from transactions t inner join date d
+				on t.order_date = d.date
+			)
+			select sales, codes, Total, (sales/Total)*100 Percentage
+			from percent_cte;
+						
+						SUBQUERY AND JOINS
+
+What if I wanted to find Market Code with the total sales quantity that was higher than the average sales quantity of all the sales??
+
+Let's break it down:
+		- I could first sum the sales_quantity values and group them by market_code;
+		- Then I would to find the average value for the values calculated above;
+		- Then all records that have values higher than the average would be returned.
+
+This is tricky. to find the first part, I need to use the sum aggregate function on the 'sales_qty' to get the sum, then group the results by market_code:
+
+		select market_code, sum(sales_qty) as sales_quantity
+		from transactions
+		group by market_code;..............(1)
+
+I need to then use this result as a table from which to find the average. This means creating a subquery:
+		select avg(sales_quantity) as avg_quantity
+		from
+		(
+		select market_code, sum(sales_qty) as sales_quantity
+		from transactions
+		group by market_code
+		) x;................(2)
+
+the 'x' is just an alias I gave to the table. The script above gives an average value.
+
+Now, to compare:
+	We basically now have two tables, (1)&(2). What we need to do is join them, and get those values that meet the requirement.
+
+
+		select *
+		from
+	        (
+		  select market_code, sum(sales_qty) as sales_quantity
+		  from transactions
+		  group by market_code
+		) quatities
+
+		join 
+
+		(select avg(sales_quantity) as avg_quantity
+		from
+		(
+		select market_code, sum(sales_qty) as sales_quantity
+		from transactions
+		group by market_code
+		) x ) sales_groups
+
+		on quatities.sales_quantity > sales_groups.avg_quantity;
+
+These tables have been given Alliases, 'quantities' and 'sales_groups'.		
+
+
+		
